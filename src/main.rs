@@ -1,6 +1,7 @@
 use http_types::Mime;
 use rust_embed::RustEmbed;
 use std::fmt::Debug;
+use std::path::Path;
 use std::sync::Arc;
 use tide::log;
 use tide::prelude::*;
@@ -93,10 +94,12 @@ struct Asset;
 
 struct Middle {}
 
-#[derive(Debug, Deserialize)]
+use infer::Infer;
+
 struct Animal {
     name: String,
     legs: u8,
+    infer: Infer,
 }
 
 #[tide::utils::async_trait]
@@ -104,6 +107,7 @@ impl Middleware<Arc<Animal>> for Middle {
     async fn handle(&self, req: Request<Arc<Animal>>, next: Next<'_, Arc<Animal>>) -> tide::Result {
         println!("{} - {}", req.state().name, req.state().legs);
         Ok(next.run(req).await)
+        // Ok(StatusCode::Ok.into())
     }
     fn name(&self) -> &str {
         "test middle"
@@ -121,12 +125,15 @@ async fn main() -> tide::Result<()> {
     std::env::set_var("TIDE_KEY_PATH", "d:\\keys\\server.key");
     log::start();
 
+    let mut infer = Infer::new();
+    infer.add("txt", "txt", |v| true);
     let mut app = tide::with_state(Arc::new(Animal {
         name: "hello world".into(),
         legs: 8,
+        infer: infer,
     }));
-    app.with(Middle {});
-    app.at("/*").get(order_shoes);
+    app.at("/*").with(Middle {}).get(order_shoes);
+    // app.with(Middle {});
     // app.listen(
     //     TlsListener::build()
     //         .addrs("0.0.0.0:4433")
@@ -140,7 +147,8 @@ async fn main() -> tide::Result<()> {
 
 use async_std::io::Cursor;
 use http_types::StatusCode;
-
+use std::convert::From;
+use std::str::FromStr;
 // 读取打包静态文件数据
 async fn order_shoes(req: Request<Arc<Animal>>) -> tide::Result {
     let file = req.url().path();
@@ -151,10 +159,16 @@ async fn order_shoes(req: Request<Arc<Animal>>) -> tide::Result {
                 return Ok(StatusCode::NoContent.into());
             }
             let cursor = Cursor::new(content.data);
+
+            let path = Path::new(file);
+            let ext = path
+                .extension()
+                .map_or("jpg", |v| v.to_str().map_or("jpg", |v| v));
             let mime = Mime::sniff(cursor.get_ref()).map_or(
-                Mime::from_extension(file).map_or(http_types::mime::BYTE_STREAM, |v| v),
+                Mime::from_extension(ext).map_or(http_types::mime::BYTE_STREAM, |v| v),
                 |v| v,
             );
+            //
             let mut body = Body::from_reader(cursor, Some(len));
             body.set_mime(mime);
             Ok(body.into())
