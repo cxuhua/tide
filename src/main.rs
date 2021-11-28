@@ -145,30 +145,37 @@ async fn main() -> tide::Result<()> {
     Ok(())
 }
 
+// 获取文件类型Mime
+async fn get_mime(bytes: &[u8], path: &str, default: &str) -> Mime {
+    Mime::sniff(bytes).map_or_else(
+        |_| {
+            let path = Path::new(path);
+            let ext = path
+                .extension()
+                .map_or(default, |v| v.to_str().map_or(default, |v| v));
+            Mime::from_extension(ext).map_or(http_types::mime::BYTE_STREAM, |v| v)
+        },
+        |v| v,
+    )
+}
+
 use async_std::io::Cursor;
 use http_types::StatusCode;
 use std::convert::From;
-use std::str::FromStr;
 // 读取打包静态文件数据
 async fn order_shoes(req: Request<Arc<Animal>>) -> tide::Result {
-    let file = req.url().path();
-    match Asset::get(&file[1..]) {
+    let path = req.url().path();
+    if path.is_empty() {
+        return Ok(StatusCode::BadRequest.into());
+    }
+    match Asset::get(&path[1..]) {
         Some(content) => {
             let len = content.data.len();
             if len == 0 {
                 return Ok(StatusCode::NoContent.into());
             }
             let cursor = Cursor::new(content.data);
-
-            let path = Path::new(file);
-            let ext = path
-                .extension()
-                .map_or("jpg", |v| v.to_str().map_or("jpg", |v| v));
-            let mime = Mime::sniff(cursor.get_ref()).map_or(
-                Mime::from_extension(ext).map_or(http_types::mime::BYTE_STREAM, |v| v),
-                |v| v,
-            );
-            //
+            let mime = get_mime(cursor.get_ref(), path, "jpg").await;
             let mut body = Body::from_reader(cursor, Some(len));
             body.set_mime(mime);
             Ok(body.into())
