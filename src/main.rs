@@ -1,11 +1,13 @@
 use http_types::Mime;
 use rust_embed::RustEmbed;
 use std::fmt::Debug;
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use tide::log;
 use tide::prelude::*;
 use tide::Body;
+use tide::Response;
 use tide::{Middleware, Next, Request};
 // use tide_rustls::rustls::Session;
 // use tide_rustls::TlsListener;
@@ -100,6 +102,7 @@ struct Animal {
     name: String,
     legs: u8,
     infer: Infer,
+    schema: Schema,
 }
 
 #[tide::utils::async_trait]
@@ -131,7 +134,9 @@ async fn main() -> tide::Result<()> {
         name: "hello world".into(),
         legs: 8,
         infer: infer,
+        schema: schema(),
     }));
+    app.at("/app/v1").post(run_graphql).get(handle_graphiql);
     app.at("/*").with(Middle {}).get(order_shoes);
     // app.with(Middle {});
     // app.listen(
@@ -146,7 +151,7 @@ async fn main() -> tide::Result<()> {
 }
 
 // 获取文件类型Mime
-async fn get_mime(bytes: &[u8], path: &str, default: &str) -> Mime {
+fn sniff_mime(bytes: &[u8], path: &str, default: &str) -> Mime {
     Mime::sniff(bytes).map_or_else(
         |_| {
             let path = Path::new(path);
@@ -162,6 +167,7 @@ async fn get_mime(bytes: &[u8], path: &str, default: &str) -> Mime {
 use async_std::io::Cursor;
 use http_types::StatusCode;
 use std::convert::From;
+use tide::http::mime;
 // 读取打包静态文件数据
 async fn order_shoes(req: Request<Arc<Animal>>) -> tide::Result {
     let path = req.url().path();
@@ -175,11 +181,90 @@ async fn order_shoes(req: Request<Arc<Animal>>) -> tide::Result {
                 return Ok(StatusCode::NoContent.into());
             }
             let cursor = Cursor::new(content.data);
-            let mime = get_mime(cursor.get_ref(), path, "jpg").await;
+            let mime = sniff_mime(cursor.get_ref(), path, "jpg");
             let mut body = Body::from_reader(cursor, Some(len));
             body.set_mime(mime);
             Ok(body.into())
         }
         None => Ok(StatusCode::NotFound.into()),
     }
+}
+
+use juniper::{
+    graphql_object,
+    http::{playground, GraphQLBatchRequest, GraphQLRequest},
+    EmptyMutation, EmptySubscription, FieldError, GraphQLEnum, InputValue, RootNode,
+};
+
+async fn handle_graphiql(_: Request<Arc<Animal>>) -> tide::Result<impl Into<Response>> {
+    Ok(Response::builder(200)
+        .body(playground::playground_source("/app/v1", None))
+        .content_type(mime::HTML))
+}
+
+#[derive(Clone, Debug)]
+struct User {
+    id: i32,
+    name: String,
+    r#type: String,
+}
+
+#[graphql_object(context = Animal)]
+impl User {
+    fn id(&self) -> i32 {
+        self.id
+    }
+    #[graphql(name = "actualFieldName", description = "field description")]
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn r#type(&self) -> &str {
+        &self.r#type
+    }
+}
+
+impl juniper::Context for Animal {}
+
+#[derive(Clone, Copy, Debug)]
+struct Query;
+
+#[graphql_object(context = Animal)]
+impl Query {
+    #[graphql(arguments(i(default = 110, description = "Argument description....",)))]
+    async fn code(i: i32) -> Option<i32> {
+        Some(i)
+    }
+    async fn users() -> Vec<User> {
+        vec![User {
+            id: 1,
+            name: "user1".into(),
+            r#type: "tt".into(),
+        }]
+    }
+    async fn float() -> Result<f64, FieldError> {
+        Ok(100.0)
+    }
+}
+
+type Schema = RootNode<'static, Query, EmptyMutation<Animal>, EmptySubscription<Animal>>;
+
+fn schema() -> Schema {
+    Schema::new(
+        Query,
+        EmptyMutation::<Animal>::new(),
+        EmptySubscription::<Animal>::new(),
+    )
+}
+
+async fn run_graphql(mut req: Request<Arc<Animal>>) -> tide::Result {
+    let query: GraphQLRequest = req.body_json().await?;
+    let response = query.execute(&req.state().schema, req.state()).await;
+    let status = if response.is_ok() {
+        StatusCode::Ok
+    } else {
+        StatusCode::BadRequest
+    };
+    Ok(Response::builder(status)
+        .body(Body::from_json(&response)?)
+        .build())
 }
