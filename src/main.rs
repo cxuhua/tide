@@ -117,12 +117,22 @@ impl Middleware<Arc<Animal>> for Middle {
     }
 }
 
+use clap::{App, Arg};
 use tide::sse;
 
 #[async_std::main]
 async fn main() -> tide::Result<()> {
-    // let index_html = Asset::get("qungonghuo.jpg").unwrap();
-    // println!("{:?}", index_html.data);
+    let m = App::new("tide")
+        .arg(
+            Arg::with_name("release")
+                .long("opt")
+                .takes_value(true)
+                .help("iiiiiiiiiii input")
+                .required(true),
+        )
+        .get_matches();
+
+    println!("aaaaa:{}", m.value_of("release").unwrap());
 
     std::env::set_var("TIDE_CERT_PATH", "d:\\keys\\server.crt");
     std::env::set_var("TIDE_KEY_PATH", "d:\\keys\\server.key");
