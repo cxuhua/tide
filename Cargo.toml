@@ -5,8 +5,6 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-
-
 [dependencies]
 tide = "0"
 async-std = { version = "1", features = ["attributes"] }
@@ -21,6 +19,8 @@ indexmap = "1"
 infer = "0"
 clap = "2"
 juniper = "0"
+trace_caller = "0"
+backtrace = "0"
 [dependencies.redis]
 version = "0"
 features = ["async-std-comp"]

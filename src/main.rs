@@ -1,5 +1,19 @@
+mod scalar;
 use http_types::Mime;
+use juniper::graphql_scalar;
+use juniper::meta::MetaType;
+use juniper::Arguments;
+use juniper::ExecutionResult;
+use juniper::Executor;
+use juniper::GraphQLType;
+use juniper::GraphQLValue;
+use juniper::ParseScalarResult;
+use juniper::ParseScalarValue;
+use juniper::Registry;
+use juniper::ScalarValue;
+use juniper::Value;
 use rust_embed::RustEmbed;
+use scalar::MyScalarValue;
 use std::fmt::Debug;
 use std::io::Read;
 use std::path::Path;
@@ -9,6 +23,7 @@ use tide::prelude::*;
 use tide::Body;
 use tide::Response;
 use tide::{Middleware, Next, Request};
+
 // use tide_rustls::rustls::Session;
 // use tide_rustls::TlsListener;
 
@@ -30,13 +45,40 @@ async fn run_redis() -> redis::RedisResult<redis::aio::Connection> {
     }
 }
 
+use backtrace::Backtrace;
+use trace_caller::trace;
+
 #[async_std::test]
 async fn test_redis() {
-    use redis::AsyncCommands;
-    let mut con = run_redis().await.unwrap();
-    let _: () = con.set("aa", -123).await.unwrap();
-    let size: i64 = con.get("aa").await.unwrap();
-    println!("{}", size);
+    struct Foo<T: ?Sized> {
+        a: Box<T>,
+    }
+
+    struct Bar {
+        fs: Foo<i32>,
+    }
+
+    let b = Bar {
+        fs: Foo { a: Box::new(111) },
+    };
+
+    #[trace]
+    fn aa(f: Box<FnOnce()>) {
+        f();
+    }
+    let mut i = 0;
+    aa(Box::new(move || {
+        i += 1;
+        println!("{},{:?}", i, Backtrace::new());
+    }));
+    i += 1;
+    println!("{}", i);
+
+    // use redis::AsyncCommands;
+    // let mut con = run_redis().await.unwrap();
+    // let _: () = con.set("aa", -123).await.unwrap();
+    // let size: i64 = con.get("aa").await.unwrap();
+    // println!("{}", size);
 }
 #[async_std::test]
 async fn test_mongodb() {
@@ -122,17 +164,17 @@ use tide::sse;
 
 #[async_std::main]
 async fn main() -> tide::Result<()> {
-    let m = App::new("tide")
-        .arg(
-            Arg::with_name("release")
-                .long("opt")
-                .takes_value(true)
-                .help("iiiiiiiiiii input")
-                .required(true),
-        )
-        .get_matches();
+    // let m = App::new("tide")
+    //     .arg(
+    //         Arg::with_name("release")
+    //             .long("opt")
+    //             .takes_value(true)
+    //             .help("iiiiiiiiiii input")
+    //             .required(true),
+    //     )
+    //     .get_matches();
 
-    println!("aaaaa:{}", m.value_of("release").unwrap());
+    // println!("aaaaa:{}", m.value_of("release").unwrap());
 
     std::env::set_var("TIDE_CERT_PATH", "d:\\keys\\server.crt");
     std::env::set_var("TIDE_KEY_PATH", "d:\\keys\\server.key");
@@ -202,8 +244,8 @@ async fn order_shoes(req: Request<Arc<Animal>>) -> tide::Result {
 
 use juniper::{
     graphql_object,
-    http::{playground, GraphQLBatchRequest, GraphQLRequest},
-    EmptyMutation, EmptySubscription, FieldError, GraphQLEnum, InputValue, RootNode,
+    http::{playground, GraphQLRequest},
+    EmptyMutation, EmptySubscription, FieldError, RootNode,
 };
 
 async fn handle_graphiql(_: Request<Arc<Animal>>) -> tide::Result<impl Into<Response>> {
@@ -214,18 +256,42 @@ async fn handle_graphiql(_: Request<Arc<Animal>>) -> tide::Result<impl Into<Resp
 
 #[derive(Clone, Debug)]
 struct User {
-    id: i32,
+    id: UserID,
     name: String,
     r#type: String,
 }
 
+#[derive(Clone, Debug)]
+struct UserID(String);
+
+#[juniper::graphql_scalar(
+    name = "UserID",
+    description = "An opaque identifier, represented as a string"
+)]
+impl<S> GraphQLScalar for UserID
+where
+    S: juniper::ScalarValue,
+{
+    fn resolve(&self) -> juniper::Value {
+        juniper::Value::scalar(self.0.to_owned())
+    }
+
+    fn from_input_value(value: &juniper::InputValue) -> Option<UserID> {
+        value.as_string_value().map(|s| UserID(s.to_owned()))
+    }
+
+    fn from_str<'a>(value: juniper::ScalarToken<'a>) -> juniper::ParseScalarResult<'a, S> {
+        <String as juniper::ParseScalarValue<S>>::from_str(value)
+    }
+}
+
 #[graphql_object(context = Animal)]
 impl User {
-    fn id(&self) -> i32 {
-        self.id
+    fn id(&self) -> &UserID {
+        &self.id
     }
-    #[graphql(name = "actualFieldName", description = "field description")]
-    fn name(&self) -> &str {
+    #[graphql(name = "name1", description = "field description")]
+    async fn name(&self) -> &str {
         &self.name
     }
     fn r#type(&self) -> &str {
@@ -241,25 +307,26 @@ struct Query;
 #[graphql_object(context = Animal)]
 impl Query {
     #[graphql(arguments(i(default = 110, description = "Argument description....",)))]
-    async fn code(i: i32) -> Option<i32> {
+    async fn code(&self, i: i32) -> Option<i32> {
         Some(i)
     }
-    async fn users() -> Vec<User> {
+    async fn users(&self) -> Vec<User> {
         vec![User {
-            id: 1,
+            id: UserID("aa".into()),
             name: "user1".into(),
             r#type: "tt".into(),
         }]
     }
-    async fn float() -> Result<f64, FieldError> {
+    async fn float(&self) -> Result<f64, FieldError> {
         Ok(100.0)
     }
 }
 
-type Schema = RootNode<'static, Query, EmptyMutation<Animal>, EmptySubscription<Animal>>;
+type Schema =
+    RootNode<'static, Query, EmptyMutation<Animal>, EmptySubscription<Animal>, MyScalarValue>;
 
 fn schema() -> Schema {
-    Schema::new(
+    Schema::new_with_scalar_value(
         Query,
         EmptyMutation::<Animal>::new(),
         EmptySubscription::<Animal>::new(),
@@ -267,7 +334,7 @@ fn schema() -> Schema {
 }
 
 async fn run_graphql(mut req: Request<Arc<Animal>>) -> tide::Result {
-    let query: GraphQLRequest = req.body_json().await?;
+    let query: GraphQLRequest<MyScalarValue> = req.body_json().await?;
     let response = query.execute(&req.state().schema, req.state()).await;
     let status = if response.is_ok() {
         StatusCode::Ok
